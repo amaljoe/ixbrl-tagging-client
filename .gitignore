@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Models / data (too large for git)
+models/
+
+# Streamlit
+.streamlit/
+
+# Misc
+.DS_Store
+*.log
+tmp/
+output/
