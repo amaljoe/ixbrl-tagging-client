@@ -27,7 +27,6 @@ This will prompt for your HuggingFace token.
 **Terminal 1 — start vLLM server:**
 
 ```bash
-# From the main ixbrl-tagging repo:
 bash scripts/vllm_ft_qwen.sh models/phase1_prod phase1_prod
 ```
 
