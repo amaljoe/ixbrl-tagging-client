@@ -26,7 +26,7 @@ This will prompt for your HuggingFace token.
 
 **Terminal 1 — start vLLM server:**
 
-```bash
+```basdh
 bash scripts/vllm_ft_qwen.sh models/phase1_prod phase1_prod
 ```
 

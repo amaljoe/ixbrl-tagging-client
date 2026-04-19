@@ -12,17 +12,16 @@ from playwright.sync_api import sync_playwright
 def render_xhtml_pages(
     xhtml_path: str,
     class_name: str = "page",
-    numeric_only: bool = True,
+    numeric_only: bool = False,
+    tagged_only: bool = True,
 ) -> list[tuple[Image.Image, str]]:
     """Render pages from an XHTML filing using Playwright.
 
-    Args:
-        xhtml_path:   Absolute path to the XHTML file.
-        class_name:   CSS class name used to identify page elements (e.g. 'page', 'pf').
-        numeric_only: If True, only return pages containing ix:nonfraction tags.
-
     Returns:
-        List of (PIL Image, inner_html) tuples for each matched page element.
+        List of (PIL Image, inner_html) tuples.
+        When tagged_only=True (default), only pages containing at least one
+        ix:nonfraction or ix:nonnumeric tag are screenshotted — skipping
+        rendering for pages with no XBRL entities saves significant time.
     """
     results = []
 
@@ -40,9 +39,13 @@ def render_xhtml_pages(
 
         for el in elements:
             inner_html = el.inner_html()
-            if numeric_only:
+            if tagged_only or numeric_only:
                 soup = BeautifulSoup(inner_html, "html.parser")
-                if not soup.find("ix:nonfraction"):
+                has_numeric = bool(soup.find("ix:nonfraction"))
+                has_text = bool(soup.find("ix:nonnumeric"))
+                if numeric_only and not has_numeric:
+                    continue
+                if tagged_only and not (has_numeric or has_text):
                     continue
             el.scroll_into_view_if_needed()
             png_bytes = el.screenshot()

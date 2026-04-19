@@ -173,6 +173,98 @@ def _build_shot_messages(prompt, image, shot_list):
     return msgs
 
 
+async def infer_xt_batch_async(
+    images: list[Union[str, Path, Image.Image]],
+    input_texts: list[str],
+    prompt: str,
+    system_prompt: str,
+    model_name: str = DEFAULT_MODEL_NAME,
+    api_base: str = DEFAULT_API_BASE,
+    api_key: str = DEFAULT_API_KEY,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float = 0.0,
+    top_p: float = 0.9,
+    timeout: int = 600,
+    max_concurrent: int = 32,
+    max_workers: int = 32,
+    max_input_chars: int = 24000,
+    encode_progress_fn=None,
+    infer_progress_fn=None,
+) -> list[str]:
+    """XT-style inference: one image per page + extracted-text user block.
+
+    Matches the request shape of scripts/evaluate_prod_xt.call_unified.
+    """
+    assert len(images) == len(input_texts), "images and input_texts must align"
+    url = _build_url(api_base)
+    headers = _build_headers(api_key)
+
+    def _prepare(idx):
+        img = images[idx]
+        txt = input_texts[idx][:max_input_chars]
+        image_block = _make_image_content(img)
+        text_block = {"type": "text", "text": f"{prompt}\n\n{txt}"}
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [image_block, text_block]},
+        ]
+        return idx, _build_payload(messages, model_name, max_tokens, temperature, top_p)
+
+    n_workers = min(max_workers, len(images)) or 1
+    payloads = [None] * len(images)
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for done, (idx, payload) in enumerate(tqdm(
+            pool.map(lambda i: _prepare(i), range(len(images))),
+            total=len(images), desc="Encoding",
+        ), start=1):
+            payloads[idx] = payload
+            if encode_progress_fn:
+                encode_progress_fn(done, len(images))
+
+    sem = asyncio.Semaphore(max_concurrent)
+    results: list = [None] * len(images)
+    pbar = tqdm(total=len(images), desc="Inference")
+
+    async def _send(idx, payload, session):
+        async with sem:
+            try:
+                async with session.post(url, json=payload, headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        print(f"\n  [WARNING] idx={idx} HTTP {resp.status}: {body[:300]}")
+                        pbar.update(1)
+                        return idx, None
+                    data = await resp.json()
+                    choice = data["choices"][0]
+                    finish_reason = choice.get("finish_reason", "")
+                    if finish_reason == "length":
+                        print(f"\n  [WARNING] idx={idx} finish_reason=length — output truncated")
+                    pbar.update(1)
+                    if infer_progress_fn:
+                        infer_progress_fn(pbar.n, len(images))
+                    return idx, choice["message"]["content"]
+            except Exception as e:
+                print(f"\n  [WARNING] idx={idx} exception: {type(e).__name__}: {e}")
+                pbar.update(1)
+                return idx, None
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [_send(i, p, session) for i, p in enumerate(payloads)]
+        completed = await asyncio.gather(*tasks, return_exceptions=True)
+
+    pbar.close()
+
+    for item in completed:
+        if isinstance(item, Exception):
+            print(f"\n  [WARNING] async task raised {type(item).__name__}: {item!r}")
+            continue
+        idx, response = item
+        results[idx] = response
+
+    return results
+
+
 async def infer_batch_async(
     images: list[Union[str, Path, Image.Image]],
     prompt: str,
