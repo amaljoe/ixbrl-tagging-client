@@ -1,6 +1,6 @@
 # iXBRL Tagging Demo
 
-Demo for the `xbrl-model`, a fine-tuned Qwen3-VL-2B model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
+Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ playwright install chromium
 bash download.sh
 ```
 
-Prompts for a HuggingFace read token. Downloads `amaljoe88/xbrl-model` into `models/phase2`.
+Prompts for HuggingFace token. Downloads `amaljoe88/xbrl-model` into `models/phase2`.
 
 ## Running
 
@@ -44,7 +44,7 @@ Open `http://localhost:8501` in your browser.
 
 ### XHTML filing with iXBRL tags (full evaluation)
 
-1. Upload an ESEF XHTML filing (`.xhtml` or `.html`)
+1. Upload an ESEF XHTML filing (`.xhtml`)
 2. Filing year and page class are auto-detected, edit if needed
 3. Click **Tag Document** — only pages containing iXBRL entities are rendered and tagged
 4. Click **Evaluate** to compare predictions against embedded ground truth
