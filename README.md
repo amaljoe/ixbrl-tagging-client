@@ -38,7 +38,7 @@ bash scripts/serve.sh
 streamlit run src/main.py
 ```
 
-Open `http://localhost:8501` in your browser.
+Open `http://localhost:8501` in your browser after port forwarding.
 
 ## Usage
 
