@@ -8,6 +8,8 @@ Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and t
 
 ![Evaluation results](assets/evaluation-results.jpeg)
 
+![Dev mode](assets/dev-mode.png)
+
 ## Prerequisites
 
 - Python 3.10+
