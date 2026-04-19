@@ -16,7 +16,7 @@ Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and t
 ## Prerequisites
 
 - Python 3.10+
-- NVIDIA GPU (2×A40 recommended) with vLLM installed
+- NVIDIA GPU with vLLM installed
 - Chromium for Playwright (install once, see below)
 
 ## Setup
