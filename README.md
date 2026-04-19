@@ -1,12 +1,12 @@
 # iXBRL Tagging Demo
 
-Streamlit demo for the `xbrl-model` — a fine-tuned Qwen3-VL-2B model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
+Demo for the `xbrl-model`, a fine-tuned Qwen3-VL-2B model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
 
 ## Prerequisites
 
 - Python 3.10+
 - NVIDIA GPU (2×A40 recommended) with vLLM installed
-- Chromium for Playwright (install once — see below)
+- Chromium for Playwright (install once, see below)
 
 ## Setup
 
@@ -24,23 +24,15 @@ bash download.sh
 
 Prompts for a HuggingFace read token. Downloads `amaljoe88/xbrl-model` into `models/phase2`.
 
-### Upload model weights (maintainers only)
-
-```bash
-bash scripts/push_phase2.sh
-```
-
-Prompts for a HuggingFace write token. Uploads the local checkpoint to `amaljoe88/xbrl-model`.
-
 ## Running
 
-**Terminal 1 — start vLLM server:**
+**Terminal 1: start vLLM server**
 
 ```bash
-bash scripts/vllm_ft_qwen.sh models/phase2 phase2
+bash scripts/serve.sh
 ```
 
-**Terminal 2 — start the demo:**
+**Terminal 2: start the demo**
 
 ```bash
 streamlit run src/main.py
@@ -53,7 +45,7 @@ Open `http://localhost:8501` in your browser.
 ### XHTML filing with iXBRL tags (full evaluation)
 
 1. Upload an ESEF XHTML filing (`.xhtml` or `.html`)
-2. Filing year and page class are auto-detected — edit if needed
+2. Filing year and page class are auto-detected, edit if needed
 3. Click **Tag Document** — only pages containing iXBRL entities are rendered and tagged
 4. Click **Evaluate** to compare predictions against embedded ground truth
 5. View holistic metrics (F1, Precision, Recall, Concept / Year / Unit / Scale accuracy) and per-page breakdowns for numeric, text, and overall entities
