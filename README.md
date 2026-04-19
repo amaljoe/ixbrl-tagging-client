@@ -2,6 +2,12 @@
 
 Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
 
+## Screenshots
+
+![Tagging demo](assets/tagging-demo.jpeg)
+
+![Evaluation results](assets/evaluation-results.jpeg)
+
 ## Prerequisites
 
 - Python 3.10+
