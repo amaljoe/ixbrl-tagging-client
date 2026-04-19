@@ -4,10 +4,13 @@ Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and t
 
 ## Screenshots
 
+**Upload & Tag**
 ![Tagging demo](assets/tagging-demo.jpeg)
 
+**Evaluation Results**
 ![Evaluation results](assets/evaluation-results.jpeg)
 
+**Dev Mode**
 ![Dev mode](assets/dev-mode.png)
 
 ## Prerequisites
