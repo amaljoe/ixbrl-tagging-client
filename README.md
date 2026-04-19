@@ -1,9 +1,11 @@
 # iXBRL Tagging Demo
 
+Streamlit demo for the `xbrl-model` — a fine-tuned Qwen3-VL-2B model that tags both numeric facts and text disclosures in ESEF XHTML filings using inline `<xbrl>` annotations.
+
 ## Prerequisites
 
 - Python 3.10+
-- NVIDIA GPU with vLLM serving the phase1_prod checkpoint
+- NVIDIA GPU (2×A40 recommended) with vLLM installed
 - Chromium for Playwright (install once — see below)
 
 ## Setup
@@ -20,20 +22,27 @@ playwright install chromium
 bash download.sh
 ```
 
-This will prompt for your HuggingFace token.
+Prompts for a HuggingFace read token. Downloads `amaljoe88/xbrl-model` into `models/phase2`.
+
+### Upload model weights (maintainers only)
+
+```bash
+bash scripts/push_phase2.sh
+```
+
+Prompts for a HuggingFace write token. Uploads the local checkpoint to `amaljoe88/xbrl-model`.
 
 ## Running
 
 **Terminal 1 — start vLLM server:**
 
-```basdh
-bash scripts/vllm_ft_qwen.sh models/phase1_prod phase1_prod
+```bash
+bash scripts/vllm_ft_qwen.sh models/phase2 phase2
 ```
 
 **Terminal 2 — start the demo:**
 
 ```bash
-cd ixbrl-tagging-client
 streamlit run src/main.py
 ```
 
@@ -41,28 +50,30 @@ Open `http://localhost:8501` in your browser.
 
 ## Usage
 
-### XHTML filing (full evaluation)
+### XHTML filing with iXBRL tags (full evaluation)
 
 1. Upload an ESEF XHTML filing (`.xhtml` or `.html`)
-2. Enter the page class name used in the filing (default: `page`; common alternatives: `pf`)
-3. Click **Tag Document** — pages render and the model tags each one in batches
+2. Filing year and page class are auto-detected — edit if needed
+3. Click **Tag Document** — only pages containing iXBRL entities are rendered and tagged
 4. Click **Evaluate** to compare predictions against embedded ground truth
-5. View holistic metrics (Precision, Recall, F1, Concept/Year/Unit/Scale accuracy) and per-page breakdowns
+5. View holistic metrics (F1, Precision, Recall, Concept / Year / Unit / Scale accuracy) and per-page breakdowns for numeric, text, and overall entities
 
-### PDF (tag-only mode)
+### XHTML filing without iXBRL tags
 
-1. Upload a PDF
-2. Enter page numbers to tag (comma-separated, e.g. `1,3,5`)
-3. Click **Tag Selected Pages**
-4. View extracted entities per page (no evaluation available)
+1. Upload a plain XHTML/HTML file
+2. Enter the page numbers to tag (comma-separated or ranges, e.g. `1,3,5-10`)
+3. Click **Tag Selected Pages** — tags extracted, no evaluation available
 
-## Sidebar configuration
+## Sidebar settings
 
 | Setting | Default | Description |
 |---|---|---|
-| vLLM Server URL | `http://localhost:8000` | Address of the model server |
-| Model name | `phase1_prod` | Name registered with vLLM |
-| Max tokens | 10000 | Maximum output tokens per page |
-| Temperature | 0.0 | Sampling temperature (0 = deterministic) |
-| Timeout (s) | 600 | Per-page HTTP timeout |
-| Rep-cap | 50 | Max repetitions of the same value |
+| vLLM server URL | `http://localhost:8000` | Address of the OpenAI-compatible vLLM server |
+| Model name | `phase2` | Served model name registered with vLLM |
+| Max output tokens | 12000 | Maximum tokens generated per page |
+| Temperature | 0.0 | Sampling temperature (0 = greedy) |
+| Request timeout (s) | 600 | Per-page HTTP timeout |
+| Concurrency | 48 | Pages sent to the model in parallel |
+| Max input chars | 24000 | Truncation limit for extracted page text |
+| Max pages | 0 (all) | Stop after this many tagged pages |
+| Dev mode | off | Show raw model input and output per page |
