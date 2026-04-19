@@ -21,7 +21,7 @@ def render_xhtml_pages(
     Args:
         tagged_only: Skip pages with no ix:nonfraction or ix:nonnumeric tags.
         only_indices: If given, only render 1-based page positions in this set.
-        progress_fn: Optional callback(done, total) called after each rendered page.
+        progress_fn: Optional callback(scanned, total, rendered) called after each page.
 
     Returns:
         List of (PIL Image, inner_html) tuples.
@@ -45,20 +45,20 @@ def render_xhtml_pages(
         ]
         total = len(candidates)
 
-        for done, (i, el) in enumerate(candidates, start=1):
+        for scanned, (i, el) in enumerate(candidates, start=1):
             inner_html = el.inner_html()
             if tagged_only:
                 soup = BeautifulSoup(inner_html, "html.parser")
                 if not soup.find("ix:nonfraction") and not soup.find("ix:nonnumeric"):
                     if progress_fn:
-                        progress_fn(done, total)
+                        progress_fn(scanned, total, len(results))
                     continue
             el.scroll_into_view_if_needed()
             png_bytes = el.screenshot()
             img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
             results.append((img, inner_html))
             if progress_fn:
-                progress_fn(done, total)
+                progress_fn(scanned, total, len(results))
 
         browser.close()
 

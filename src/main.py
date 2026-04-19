@@ -20,7 +20,7 @@ if _src_dir not in sys.path:
 import streamlit as st
 from bs4 import BeautifulSoup
 
-from utils.inference import infer_xt_batch_async
+from utils.inference import infer_xt_batch_async, _resize_image
 from utils.xhtml_renderer import render_xhtml_pages
 from utils.xhtml_utils import parse_xhtml
 from utils.xt_extract import (
@@ -312,11 +312,14 @@ else:
 if tag_btn:
     file_bytes = file_bytes_all
 
-    render_bar = st.progress(0, text="Rendering pages...")
+    render_bar = st.progress(0, text="Scanning pages...")
+    _scan_state = {"scanned": 0, "total": 0}
 
-    def _render_progress(done, total):
-        render_bar.progress(min(done / max(total, 1), 1.0),
-                            text=f"Rendering pages... ({done}/{total})")
+    def _render_progress(scanned, total, rendered):
+        _scan_state["scanned"] = scanned
+        _scan_state["total"] = total
+        render_bar.progress(min(scanned / max(total, 1), 1.0),
+                            text=f"Scanning pages... ({scanned}/{total})")
 
     with tempfile.NamedTemporaryFile(suffix=f".{file_ext}", delete=False) as tmp:
         tmp.write(file_bytes)
@@ -340,7 +343,7 @@ if tag_btn:
     finally:
         os.unlink(tmp_path)
 
-    render_bar.progress(1.0, text=f"Rendered {len(pages)} pages.")
+    render_bar.progress(1.0, text=f"Scanned {_scan_state['total']} pages. Rendered {len(pages)} pages.")
 
     full_soup = BeautifulSoup(file_bytes.decode(errors="ignore"), "html.parser")
     filing_year = filing_year_input.strip() or (detect_filing_year(context_map) if has_ix else "")
@@ -438,7 +441,7 @@ if "tagged_pages" in st.session_state:
                     thumb_col, text_col = st.columns([1, 3])
                     with thumb_col:
                         st.markdown("**Page Image**")
-                        st.image(img, width=200)
+                        st.image(_resize_image(img, 1568), use_container_width=True)
                     with text_col:
                         inp = input_texts_all[i] if i < len(input_texts_all) else ""
                         st.markdown("**Extracted Text**")
