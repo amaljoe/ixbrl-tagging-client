@@ -10,7 +10,7 @@ Demo for the `xbrl-model`, a fine-tuned model that tags both numeric facts and t
 **Evaluation Results**
 ![Evaluation results](assets/evaluation-results.jpeg)
 
-**Dev Mode**
+**Raw Input / Output**
 ![Dev mode](assets/dev-mode.png)
 
 ## Prerequisites
