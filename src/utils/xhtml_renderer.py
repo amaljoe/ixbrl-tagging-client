@@ -12,16 +12,19 @@ from playwright.sync_api import sync_playwright
 def render_xhtml_pages(
     xhtml_path: str,
     class_name: str = "page",
-    numeric_only: bool = False,
     tagged_only: bool = True,
+    only_indices: set[int] | None = None,
+    progress_fn=None,
 ) -> list[tuple[Image.Image, str]]:
     """Render pages from an XHTML filing using Playwright.
 
+    Args:
+        tagged_only: Skip pages with no ix:nonfraction or ix:nonnumeric tags.
+        only_indices: If given, only render 1-based page positions in this set.
+        progress_fn: Optional callback(done, total) called after each rendered page.
+
     Returns:
         List of (PIL Image, inner_html) tuples.
-        When tagged_only=True (default), only pages containing at least one
-        ix:nonfraction or ix:nonnumeric tag are screenshotted — skipping
-        rendering for pages with no XBRL entities saves significant time.
     """
     results = []
 
@@ -36,21 +39,26 @@ def render_xhtml_pages(
         page.wait_for_load_state("domcontentloaded")
 
         elements = page.query_selector_all(f".{class_name}")
+        candidates = [
+            (i, el) for i, el in enumerate(elements, start=1)
+            if only_indices is None or i in only_indices
+        ]
+        total = len(candidates)
 
-        for el in elements:
+        for done, (i, el) in enumerate(candidates, start=1):
             inner_html = el.inner_html()
-            if tagged_only or numeric_only:
+            if tagged_only:
                 soup = BeautifulSoup(inner_html, "html.parser")
-                has_numeric = bool(soup.find("ix:nonfraction"))
-                has_text = bool(soup.find("ix:nonnumeric"))
-                if numeric_only and not has_numeric:
-                    continue
-                if tagged_only and not (has_numeric or has_text):
+                if not soup.find("ix:nonfraction") and not soup.find("ix:nonnumeric"):
+                    if progress_fn:
+                        progress_fn(done, total)
                     continue
             el.scroll_into_view_if_needed()
             png_bytes = el.screenshot()
             img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
             results.append((img, inner_html))
+            if progress_fn:
+                progress_fn(done, total)
 
         browser.close()
 

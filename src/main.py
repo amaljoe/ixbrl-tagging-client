@@ -9,6 +9,7 @@ matching logic, and metrics (numeric / text / overall).
 
 import asyncio
 import os
+import re
 import sys
 import tempfile
 
@@ -21,7 +22,6 @@ from bs4 import BeautifulSoup
 
 from utils.inference import infer_xt_batch_async
 from utils.xhtml_renderer import render_xhtml_pages
-from utils.pdf_utils import render_pdf_pages
 from utils.xhtml_utils import parse_xhtml
 from utils.xt_extract import (
     PROMPT_PROD_XT_UNIFIED,
@@ -30,6 +30,7 @@ from utils.xt_extract import (
     aggregate_typed,
     classify_entities,
     detect_filing_year,
+    detect_filing_year_from_bytes,
     extract_page_text,
     load_gt_from_output,
     match_entities,
@@ -47,6 +48,33 @@ _TH = "padding:4px 8px;text-align:left;background:#444;color:#fff;font-size:12px
 
 def _esc(s) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def highlight_xbrl_output(text: str) -> str:
+    """Render model output with <xbrl> tags and their content highlighted."""
+    escaped = _esc(text)
+    # Highlight opening tag (attributes)
+    escaped = re.sub(
+        r"(&lt;xbrl\b)([^&].*?)(&gt;)",
+        r'<span style="color:#569cd6;font-weight:600">\1</span>'
+        r'<span style="color:#9cdcfe">\2</span>'
+        r'<span style="color:#569cd6;font-weight:600">\3</span>',
+        escaped,
+    )
+    # Highlight content between tags
+    escaped = re.sub(
+        r"(&gt;)(.*?)(&lt;/xbrl&gt;)",
+        r'\1<span style="color:#ce9178;font-weight:600">\2</span>'
+        r'<span style="color:#569cd6;font-weight:600">\3</span>',
+        escaped,
+    )
+    return (
+        '<div style="background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;'
+        'padding:12px;border-radius:6px;overflow:auto;max-height:400px;white-space:pre-wrap;'
+        'word-break:break-word">'
+        + escaped
+        + "</div>"
+    )
 
 
 def _attr_cell(gt_val, pred_val) -> str:
@@ -163,42 +191,63 @@ def compact_metric_line(m: dict) -> str:
 
 # ── Page config ──────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title="iXBRL Tagger — phase2", layout="wide")
-st.title("iXBRL Financial Report Tagger — phase2 (numeric + text)")
-st.caption(
-    "Unified Qwen3-VL-2B tagger (prod-unified-xt). Tags both numeric facts and "
-    "text disclosures inline with <xbrl> tags."
-)
+st.set_page_config(page_title="iXBRL Tagger", layout="wide")
+st.title("iXBRL Financial Report Tagger")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("Server")
-    api_base = st.text_input("vLLM server URL", value="http://localhost:8000")
-    model_name = st.text_input("Model name", value="phase2")
+    api_base = st.text_input(
+        "vLLM server URL", value="http://localhost:8000",
+        help="Base URL of the OpenAI-compatible vLLM inference server.",
+    )
+    model_name = st.text_input(
+        "Model name", value="phase2",
+        help="The served model name passed as the `model` field in API requests.",
+    )
     st.divider()
     st.header("Inference")
-    max_tokens = st.slider("Max tokens", 4000, 16000, 12000, step=500)
-    temperature = st.slider("Temperature", 0.0, 1.0, 0.0, step=0.05)
-    timeout_s = st.slider("Timeout (s)", 60, 900, 600, step=30)
-    max_concurrent = st.slider("Concurrency", 1, 32, 8, step=1)
-    max_input_chars = st.slider("Max input chars (per page)", 4000, 32000, 24000, step=1000)
+    max_tokens = st.slider(
+        "Max output tokens", 4000, 16000, 12000, step=500,
+        help="Maximum number of tokens the model can generate per page.",
+    )
+    temperature = st.slider(
+        "Temperature", 0.0, 1.0, 0.0, step=0.05,
+        help="Sampling temperature. 0 = greedy (recommended for tagging).",
+    )
+    timeout_s = st.slider(
+        "Request timeout (s)", 60, 900, 600, step=30,
+        help="Per-page inference timeout in seconds.",
+    )
+    max_concurrent = st.slider(
+        "Concurrency", 1, 64, 48, step=1,
+        help="Number of pages sent to the model in parallel.",
+    )
+    max_input_chars = st.slider(
+        "Max input chars (per page)", 4000, 32000, 24000, step=1000,
+        help="Truncation limit for the extracted page text sent alongside the image.",
+    )
+    max_pages = st.number_input(
+        "Max pages (0 = all)", min_value=0, max_value=5000, value=0, step=1,
+        help="Stop after this many tagged pages. 0 processes the entire filing.",
+    )
     st.divider()
-    st.caption(
-        "Metrics match scripts/evaluate_prod_xt.py: value matching uses hard for "
-        "numeric and soft (ws-strip + prefix + word-containment + Jaccard>0.5) for text."
+    dev_mode = st.toggle(
+        "Dev mode",
+        help="Show raw model input and output for each page.",
     )
 
 api_base_v1 = api_base.rstrip("/") + "/v1"
 
 # ── Step 1: Upload & Tag ─────────────────────────────────────────────────────
 
-st.header("Step 1 — Upload & Tag")
+st.header("Step 1: Upload & Tag")
 
 uploaded = st.file_uploader(
     "Upload financial report",
-    type=["xhtml", "html", "pdf"],
-    help="Upload an XBRL-tagged XHTML filing for full evaluation, or a PDF for tag-only mode.",
+    type=["xhtml", "html"],
+    help="Upload an XHTML filing. If it contains iXBRL tags, full ground-truth evaluation is available.",
 )
 
 if uploaded is None:
@@ -206,90 +255,111 @@ if uploaded is None:
     st.stop()
 
 file_ext = uploaded.name.rsplit(".", 1)[-1].lower()
-is_xhtml = file_ext in ("xhtml", "html")
-is_pdf = file_ext == "pdf"
+file_bytes_all = uploaded.read()
+uploaded.seek(0)
+_preview = file_bytes_all.lower()
+has_ix = b"ix:nonfraction" in _preview or b"ix:nonnumeric" in _preview
+_detected_year = detect_filing_year_from_bytes(file_bytes_all)
 
-if is_xhtml:
-    st.info("XHTML detected — ground-truth evaluation is available after tagging.")
-    col_a, col_b, col_c = st.columns([2, 1, 1])
-    class_name = col_a.text_input("Page element class name", value="page",
-                                  help="CSS class used to identify individual pages (e.g. 'page', 'pf')")
-    max_pages = col_b.number_input("Max pages (0 = all)", min_value=0, max_value=5000,
-                                   value=0, step=1)
-    filing_year_input = col_c.text_input("Filing year", value="",
-                                         placeholder="auto-detect",
-                                         help="Override the auto-detected filing year.")
+import re as _re
+_detected_class = "page"
+for _candidate in ("pf", "page"):
+    if _re.search(rb'class=["\'][^"\']*\b' + _candidate.encode() + rb'\b[^"\']*["\']', file_bytes_all):
+        _detected_class = _candidate
+        break
+
+# Pre-fill editable fields when a new file is loaded.
+_file_id = f"{uploaded.name}_{len(file_bytes_all)}"
+if st.session_state.get("_file_id") != _file_id:
+    st.session_state["_file_id"] = _file_id
+    st.session_state["filing_year_input"] = _detected_year
+    st.session_state["class_name_input"] = _detected_class
+
+def _parse_page_numbers(raw: str) -> list[int]:
+    nums = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            nums.extend(range(int(a.strip()), int(b.strip()) + 1))
+        else:
+            nums.append(int(part))
+    return sorted(set(nums))
+
+if has_ix:
+    st.info("iXBRL tags detected. Ground-truth evaluation will be available after tagging.")
+    col_a, col_b = st.columns([2, 1])
+    class_name = col_a.text_input("Page element class name", key="class_name_input",
+                                  help="CSS class identifying individual pages (e.g. 'page', 'pf')")
+    filing_year_input = col_b.text_input("Filing year", key="filing_year_input",
+                                         placeholder="e.g. 2024",
+                                         help="Auto-detected from the filing. Edit to override.")
     tag_btn = st.button("Tag Document")
-elif is_pdf:
-    st.info("PDF detected — tags will be extracted but evaluation is not available.")
-    col_a, col_b = st.columns([3, 1])
-    pages_input = col_a.text_input("Pages to tag (comma-separated, ranges supported — e.g. 1,3,5-10,15)")
-    filing_year_input = col_b.text_input("Filing year", value="", placeholder="e.g. 2024")
-    tag_btn = st.button("Tag Selected Pages")
 else:
-    st.error("Unsupported file type."); st.stop()
+    st.info("No iXBRL tags found. Evaluation unavailable. Enter the pages to tag.")
+    col_a, col_b, col_c = st.columns([2, 1, 1])
+    class_name = col_a.text_input("Page element class name", key="class_name_input",
+                                  help="CSS class identifying individual pages (e.g. 'page', 'pf')")
+    pages_input = col_b.text_input("Pages to tag", placeholder="e.g. 1,3,5-10,15",
+                                   help="Comma-separated page numbers or ranges.")
+    filing_year_input = col_c.text_input("Filing year", key="filing_year_input",
+                                         placeholder="e.g. 2024",
+                                         help="Auto-detected from date patterns in the file. Edit to override.")
+    tag_btn = st.button("Tag Selected Pages")
 
 if tag_btn:
-    file_bytes = uploaded.read()
+    file_bytes = file_bytes_all
 
-    with st.status("Rendering pages...") as render_status:
-        if is_xhtml:
-            with tempfile.NamedTemporaryFile(suffix=f".{file_ext}", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-            try:
-                pages = render_xhtml_pages(tmp_path, class_name=class_name, numeric_only=False)
-                context_map, unit_map = parse_xhtml(tmp_path)
-            finally:
-                os.unlink(tmp_path)
+    render_bar = st.progress(0, text="Rendering pages...")
 
-            full_soup = BeautifulSoup(file_bytes.decode(errors="ignore"), "html.parser")
-            filing_year = filing_year_input.strip() or detect_filing_year(context_map)
+    def _render_progress(done, total):
+        render_bar.progress(min(done / max(total, 1), 1.0),
+                            text=f"Rendering pages... ({done}/{total})")
 
-            if max_pages and len(pages) > max_pages:
-                pages = pages[:max_pages]
-            render_status.update(label=f"Rendered {len(pages)} pages. Filing year: {filing_year}",
-                                 state="complete")
-
-            st.session_state["xhtml_context_map"] = context_map
-            st.session_state["xhtml_unit_map"] = unit_map
-            st.session_state["filing_year"] = filing_year
-
-            # Build input + output text for each page (same logic as build_xt_dataset)
-            with st.spinner("Extracting page text..."):
-                input_texts = []
-                output_texts = []
-                for img, inner_html in pages:
-                    inp = extract_page_text(inner_html, full_soup, context_map, unit_map, "input")
-                    out = extract_page_text(inner_html, full_soup, context_map, unit_map, "output")
-                    input_texts.append(inp)
-                    output_texts.append(out)
-            st.session_state["input_texts"] = input_texts
-            st.session_state["output_texts"] = output_texts
+    with tempfile.NamedTemporaryFile(suffix=f".{file_ext}", delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        if has_ix:
+            pages = render_xhtml_pages(tmp_path, class_name=class_name,
+                                       tagged_only=True, progress_fn=_render_progress)
+            context_map, unit_map = parse_xhtml(tmp_path)
         else:
             if not pages_input.strip():
                 st.error("Please enter page numbers to tag."); st.stop()
             try:
-                page_numbers = []
-                for part in pages_input.split(","):
-                    part = part.strip()
-                    if not part:
-                        continue
-                    if "-" in part:
-                        a, b = part.split("-", 1)
-                        page_numbers.extend(range(int(a.strip()), int(b.strip()) + 1))
-                    else:
-                        page_numbers.append(int(part))
-                page_numbers = sorted(set(page_numbers))
+                page_indices = set(_parse_page_numbers(pages_input))
             except ValueError:
-                st.error("Invalid page numbers — use integers, commas, and ranges (e.g. 1,3,5-10)."); st.stop()
-            images = render_pdf_pages(file_bytes, page_numbers)
-            pages = [(img, "") for img in images]
-            input_texts = [""] * len(pages)  # no input text available for PDFs
-            st.session_state["input_texts"] = input_texts
-            st.session_state["output_texts"] = [""] * len(pages)
-            st.session_state["filing_year"] = filing_year_input.strip()
-            render_status.update(label=f"Rendered {len(pages)} PDF pages.", state="complete")
+                st.error("Invalid page numbers. Use integers, commas, and ranges (e.g. 1,3,5-10)."); st.stop()
+            pages = render_xhtml_pages(tmp_path, class_name=class_name,
+                                       tagged_only=False, only_indices=page_indices,
+                                       progress_fn=_render_progress)
+            context_map, unit_map = {}, {}
+    finally:
+        os.unlink(tmp_path)
+
+    render_bar.progress(1.0, text=f"Rendered {len(pages)} pages.")
+
+    full_soup = BeautifulSoup(file_bytes.decode(errors="ignore"), "html.parser")
+    filing_year = filing_year_input.strip() or (detect_filing_year(context_map) if has_ix else "")
+
+    if has_ix and max_pages and len(pages) > max_pages:
+        pages = pages[:max_pages]
+
+    st.session_state["filing_year"] = filing_year
+    st.session_state["has_ix"] = has_ix
+
+    with st.spinner("Extracting page text..."):
+        input_texts, output_texts = [], []
+        for img, inner_html in pages:
+            inp = extract_page_text(inner_html, full_soup, context_map, unit_map, "input")
+            out = extract_page_text(inner_html, full_soup, context_map, unit_map, "output") if has_ix else ""
+            input_texts.append(inp)
+            output_texts.append(out)
+    st.session_state["input_texts"] = input_texts
+    st.session_state["output_texts"] = output_texts
 
     if not pages:
         st.warning("No pages found to tag."); st.stop()
@@ -326,14 +396,13 @@ if tag_btn:
         infer_progress_fn=_progress_cb,
     ))
     all_raw = [r or "" for r in results]
-    progress_bar.progress(1.0, text=f"Done — tagged {n} pages.")
+    progress_bar.progress(1.0, text=f"Done. Tagged {n} pages.")
 
     all_preds = [parse_xbrl_tags(r) for r in all_raw]
 
     st.session_state["tagged_pages"] = pages
     st.session_state["tagged_preds"] = all_preds
     st.session_state["tagged_raw"] = all_raw
-    st.session_state["file_type"] = "xhtml" if is_xhtml else "pdf"
     st.session_state["eval_done"] = False
 
 # ── Show tagging results ─────────────────────────────────────────────────────
@@ -342,7 +411,7 @@ if "tagged_pages" in st.session_state:
     pages = st.session_state["tagged_pages"]
     all_preds = st.session_state["tagged_preds"]
     all_raw = st.session_state["tagged_raw"]
-    file_type = st.session_state["file_type"]
+    has_ix = st.session_state.get("has_ix", False)
 
     st.divider()
     st.subheader(f"Tagged {len(pages)} pages")
@@ -351,28 +420,44 @@ if "tagged_pages" in st.session_state:
     st.caption(f"Predictions: {total_num} numeric + {total_txt} text entities "
                f"(filing year: {st.session_state.get('filing_year') or '—'})")
 
-    for i, ((img, _), preds) in enumerate(zip(pages, all_preds)):
+    input_texts_all = st.session_state.get("input_texts", [])
+    for i, ((img, _), preds, raw) in enumerate(zip(pages, all_preds, all_raw)):
         n_num = len([e for e in preds if e.get("unit")])
         n_txt = len([e for e in preds if not e.get("unit")])
-        label = f"Page {i + 1} — {n_num} numeric + {n_txt} text tags"
-        with st.expander(label, expanded=(i == 0 and file_type != "xhtml")):
+        label = f"Page {i + 1}: {n_num} numeric + {n_txt} text tags"
+        with st.expander(label, expanded=(i == 0 and not has_ix)):
             img_col, tbl_col = st.columns([1, 2])
             with img_col:
                 st.image(img, use_container_width=True)
             with tbl_col:
                 st.markdown(render_pred_only_table(preds), unsafe_allow_html=True)
+            if dev_mode:
+                st.divider()
+                pro_tabs = st.tabs(["Model Input", "Model Output"])
+                with pro_tabs[0]:
+                    thumb_col, text_col = st.columns([1, 3])
+                    with thumb_col:
+                        st.markdown("**Page Image**")
+                        st.image(img, width=200)
+                    with text_col:
+                        inp = input_texts_all[i] if i < len(input_texts_all) else ""
+                        st.markdown("**Extracted Text**")
+                        st.text_area("", value=inp,
+                                     height=300, disabled=True, key=f"inp_{i}")
+                with pro_tabs[1]:
+                    st.markdown("**Extracted Text with Inline Tags**")
+                    st.markdown(highlight_xbrl_output(raw), unsafe_allow_html=True)
 
     # ── Step 2: Evaluate ─────────────────────────────────────────────────────
     st.divider()
-    st.header("Step 2 — Evaluate")
+    st.header("Step 2: Evaluate")
 
-    eval_disabled = file_type != "xhtml"
     eval_btn = st.button("Evaluate",
-                         disabled=eval_disabled,
-                         help="XHTML ground truth required." if eval_disabled
+                         disabled=not has_ix,
+                         help="No iXBRL ground truth in this file." if not has_ix
                               else "Compare predictions against embedded iXBRL ground truth.")
 
-    if eval_btn and not eval_disabled:
+    if eval_btn and has_ix:
         output_texts = st.session_state["output_texts"]
 
         all_gt = [load_gt_from_output(out) for out in output_texts]
@@ -385,7 +470,7 @@ if "tagged_pages" in st.session_state:
         st.session_state["holistic"] = holistic
         st.session_state["eval_done"] = True
 
-    if st.session_state.get("eval_done") and file_type == "xhtml":
+    if st.session_state.get("eval_done") and has_ix:
         holistic = st.session_state["holistic"]
         per_page_typed = st.session_state["per_page_typed"]
         all_gt = st.session_state["all_gt"]
@@ -403,7 +488,7 @@ if "tagged_pages" in st.session_state:
         ):
             ov = typed["overall"]
             label = (
-                f"Page {i+1} — Overall {compact_metric_line(ov)}  |  "
+                f"Page {i+1}: Overall {compact_metric_line(ov)}  |  "
                 f"Num {compact_metric_line(typed['numeric'])}  |  "
                 f"Txt {compact_metric_line(typed['text'])}"
             )

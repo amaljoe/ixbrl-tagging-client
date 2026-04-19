@@ -237,6 +237,24 @@ def extract_page_text(
 
 # ── Filing year detection ───────────────────────────────────────────────────
 
+def detect_filing_year_from_bytes(raw: bytes) -> str:
+    """Quick regex scan over raw XHTML bytes — no temp file needed.
+
+    Extracts years from xbrli:endDate / xbrli:instant context elements,
+    which are the authoritative XBRL period dates. Falls back to any
+    YYYY-MM-DD date in the document if no XBRL context dates are found.
+    Tie-breaks on highest year (same logic as detect_filing_year).
+    """
+    import re
+    raw_lower = raw.lower()
+    years = re.findall(rb"<xbrli:(?:enddate|instant)>(\d{4})-\d{2}-\d{2}<", raw_lower)
+    if not years:
+        years = re.findall(rb">(\d{4})-\d{2}-\d{2}<", raw_lower)
+    if not years:
+        return ""
+    return max(y.decode() for y in years)
+
+
 def detect_filing_year(context_map: dict) -> str:
     """Return the most common 4-digit year across all contexts (the filing year).
 
